@@ -1419,6 +1419,18 @@ function downloadImg() {
   }
 }
 
+// ── 공용: 쿠팡 자동완성 수집 헬퍼 ──────────────
+async function fetchCoupangSuggest(seeds) {
+  const q = [...new Set(seeds.filter(Boolean))].slice(0,4).join(',');
+  if (!q) return { suggestions: [], bySeed: [] };
+  try {
+    const r = await fetch('/api/coupang-suggest?keyword=' + encodeURIComponent(q));
+    if (!r.ok) return { suggestions: [], bySeed: [] };
+    const j = await r.json();
+    return { suggestions: j.suggestions || [], bySeed: j.bySeed || [] };
+  } catch(e) { console.warn('쿠팡 자동완성 실패:', e); return { suggestions: [], bySeed: [] }; }
+}
+
 // ── 2. 상품명 최적화 생성 ───────────────────────
 async function runTitleGen() {
   if (!requireSession()) return;
@@ -1445,27 +1457,15 @@ async function runTitleGen() {
     : `브랜드: ${brand}, 상품명: ${pname}, 카테고리: ${cat}, 특징: ${feats}, 메모: ${memo}`;
 
   // ── 2-1. 쿠팡 자동완성 스크래핑으로 실제 인기 검색어 수집 ──
-  let coupangKeywords = [];
-  let coupangBySeed = [];
-  try {
-    const seedList = [];
-    const basePname = (resultData && resultData.product_name) || pname;
-    if (basePname) seedList.push(basePname);
-    if (brand && basePname) seedList.push(`${brand} ${basePname}`);
-    if (cat && basePname) seedList.push(`${cat} ${basePname}`);
-    if (brand) seedList.push(brand);
-    const seeds = [...new Set(seedList)].slice(0,4).join(',');
-    if (seeds) {
-      document.getElementById('titleResult').innerHTML =
-        '<div class="tool-empty">🔍 쿠팡 인기 검색어 수집 중...</div>';
-      const sr = await fetch('/api/coupang-suggest?keyword=' + encodeURIComponent(seeds));
-      if (sr.ok) {
-        const sj = await sr.json();
-        coupangKeywords = sj.suggestions || [];
-        coupangBySeed  = sj.bySeed || [];
-      }
-    }
-  } catch(e) { console.warn('쿠팡 자동완성 실패(무시):', e); }
+  document.getElementById('titleResult').innerHTML =
+    '<div class="tool-empty">🔍 쿠팡 인기 검색어 수집 중...</div>';
+  const basePname = (resultData && resultData.product_name) || pname;
+  const { suggestions: coupangKeywords, bySeed: coupangBySeed } = await fetchCoupangSuggest([
+    basePname,
+    brand && basePname ? `${brand} ${basePname}` : '',
+    cat && basePname ? `${cat} ${basePname}` : '',
+    brand
+  ]);
 
   document.getElementById('titleResult').innerHTML =
     '<div class="tool-empty">AI가 쿠팡 최적화 상품명을 생성 중입니다...</div>';
@@ -1520,7 +1520,7 @@ ${coupangRules}
         model: 'gemini-2.5-flash',
         systemInstruction: { parts: [{ text: sys }] },
         contents: [{ role: 'user', parts: [{ text: usr }] }],
-        generationConfig: { responseMimeType: "application/json", maxOutputTokens: 2048, temperature: 0.8 }
+        generationConfig: { responseMimeType: "application/json", maxOutputTokens: 4096, temperature: 0.8, thinkingConfig: { thinkingBudget: 0 } }
       })
     });
     
@@ -1615,6 +1615,7 @@ ${coupangRules}
 async function runTagGen() {
   if (!requireSession()) return;
   const brand = document.getElementById('brand').value.trim();
+  const pname = document.getElementById('pname').value.trim();
   const cat   = document.getElementById('cat').value;
   const feats = selF.length ? selF.join(', ') : '';
   const memo  = document.getElementById('memo').value.trim();
@@ -1628,24 +1629,46 @@ async function runTagGen() {
   const btn = document.getElementById('tagsBtn');
   btn.disabled = true; btn.classList.add('loading');
   document.getElementById('tagsResult').innerHTML =
-    '<div class="tool-empty">AI가 태그를 생성 중입니다...</div>';
+    '<div class="tool-empty">🔍 쿠팡 인기 검색어 수집 중...</div>';
+
+  // ── 3-1. 쿠팡 자동완성 수집 ──
+  const basePname = (resultData && resultData.product_name) || pname;
+  const { suggestions: coupangKeywords, bySeed: coupangBySeed } = await fetchCoupangSuggest([
+    basePname,
+    brand && basePname ? `${brand} ${basePname}` : '',
+    cat && basePname ? `${cat} ${basePname}` : '',
+    brand
+  ]);
+
+  document.getElementById('tagsResult').innerHTML =
+    '<div class="tool-empty">AI가 쿠팡 태그를 생성 중입니다...</div>';
 
   const productInfo = resultData
     ? `상품명: ${resultData.product_name}, 카테고리: ${cat}, 키워드: ${(resultData.keywords||[]).join(', ')}, 특징: ${(resultData.selling_points||[]).join(', ')}`
-    : `브랜드: ${brand}, 카테고리: ${cat}, 특징: ${feats}, 메모: ${memo}`;
+    : `브랜드: ${brand}, 상품명: ${pname}, 카테고리: ${cat}, 특징: ${feats}, 메모: ${memo}`;
 
-  const sys = `당신은 쿠팡 검색 최적화 전문가입니다. 반드시 순수 JSON만 출력하세요.`;
+  const coupangKwBlock = coupangKeywords.length
+    ? `\n[쿠팡 자동완성 실제 인기 검색어]\n- 통합 상위: ${coupangKeywords.slice(0,25).join(' / ')}\n${coupangBySeed.map(b=>`- "${b.seed}" 연관: ${(b.suggestions||[]).slice(0,8).join(', ')||'(없음)'}`).join('\n')}\n→ 아래 태그에 이 검색어들을 최우선으로 활용하세요.`
+    : `\n[쿠팡 자동완성] 수집 실패 → 일반 검색 키워드로 생성하세요.`;
+
+  const sys = `당신은 쿠팡 검색 SEO 전문가입니다. 반드시 순수 JSON만 출력하세요. 마크다운/설명/코드펜스 금지.`;
   const usr = `아래 상품에 맞는 쿠팡 검색 태그 20개를 생성해주세요.
 
-상품 정보: ${productInfo}
+[상품 정보]
+${productInfo}
+${coupangKwBlock}
 
-규칙:
-- 실제 쿠팡 검색량이 높은 키워드 중심
-- 브랜드명, 카테고리, 소재, 특징, 용도, 색상, 타깃 고객 등 다양하게
-- 각 태그는 2~10자 이내
-- 중복 없이 20개
+[쿠팡 태그 작성 규칙]
+1) 각 태그는 2~12자 이내, 한글 위주 (영문/숫자는 꼭 필요할 때만)
+2) 중복 금지, 의미 중복도 최소화
+3) 특수문자/이모지/쉼표/슬래시 금지 (태그 내부 공백 가능)
+4) 과장·최상급 표현 금지: "최고","1위","정품보장","무료배송","100%"
+5) 다양한 층위를 섞을 것: 카테고리어 / 브랜드·상품명 / 소재·색상·사이즈·수량 / 용도·상황 / 타깃 / 롱테일 조합
+6) 쿠팡 자동완성 결과가 있으면 그중 관련 있는 것을 8개 이상 반드시 포함할 것.
+7) 정확히 20개.
 
-{"tags": ["태그1","태그2","태그3","태그4","태그5","태그6","태그7","태그8","태그9","태그10","태그11","태그12","태그13","태그14","태그15","태그16","태그17","태그18","태그19","태그20"]}`;
+[출력 형식 — 순수 JSON]
+{"tags":["태그1","태그2","태그3","태그4","태그5","태그6","태그7","태그8","태그9","태그10","태그11","태그12","태그13","태그14","태그15","태그16","태그17","태그18","태그19","태그20"]}`;
 
   try {
     const resp = await fetch('/api/generate', {
@@ -1654,47 +1677,59 @@ async function runTagGen() {
         model: 'gemini-2.5-flash',
         systemInstruction: { parts: [{ text: sys }] },
         contents: [{ role: 'user', parts: [{ text: usr }] }],
-        generationConfig: { responseMimeType: "application/json", maxOutputTokens: 1000 }
+        generationConfig: { responseMimeType: "application/json", maxOutputTokens: 2048, temperature: 0.7, thinkingConfig: { thinkingBudget: 0 } }
       })
     });
-    
+
     if (!resp.ok) throw new Error(`서버 오류 (${resp.status})`);
-    
     const data = await resp.json();
     const raw = data.candidates?.[0]?.content?.parts?.[0]?.text || '';
-    
-    // 파싱 강화 로직
-    let parsed;
-    try {
-      let clean = raw.replace(/```json/gi, '').replace(/```/g, '').trim();
-      parsed = JSON.parse(clean);
-    } catch (e) {
-      const match = raw.match(/\{[\s\S]*\}/);
-      if(match) {
-        parsed = JSON.parse(match[0].replace(/[\u0000-\u001F\u007F-\u009F]/g, ""));
-      } else {
-        throw new Error("태그 파싱 실패");
+    const finishReason = data.candidates?.[0]?.finishReason || '';
+    if (!raw) { console.error('빈 응답:', data); throw new Error('AI 응답이 비어있습니다. ('+(finishReason||'unknown')+')'); }
+
+    // 파싱 강화 (잘린 JSON 복구)
+    const cleanRaw = raw.replace(/```json/gi,'').replace(/```/g,'').replace(/[\u0000-\u001F\u007F-\u009F]/g,'').trim();
+    const tryParse = (t)=>{try{return JSON.parse(t);}catch(_){return null;}};
+    let parsed = tryParse(cleanRaw);
+    if (!parsed) {
+      const s0=cleanRaw.indexOf('{'), e0=cleanRaw.lastIndexOf('}');
+      if (s0!==-1 && e0>s0) parsed = tryParse(cleanRaw.slice(s0,e0+1));
+    }
+    let tags = (parsed && Array.isArray(parsed.tags)) ? parsed.tags : [];
+    if (tags.length === 0) {
+      const strRe = /"((?:[^"\\]|\\.){1,20})"/g;
+      tags = [...cleanRaw.matchAll(strRe)].map(m=>m[1]).filter(s=>s && s!=='tags' && !/^\s*$/.test(s));
+    }
+    // 쿠팡 키워드로 보강
+    if (tags.length < 20 && coupangKeywords.length) {
+      const existing = new Set(tags.map(t=>t.replace(/\s/g,'').toLowerCase()));
+      for (const kw of coupangKeywords) {
+        if (tags.length >= 20) break;
+        const k = kw.replace(/\s/g,'').toLowerCase();
+        if (!existing.has(k) && kw.length <= 12) { tags.push(kw); existing.add(k); }
       }
     }
-    
-    const tags = parsed.tags || [];
+    tags = tags.slice(0,20);
+    if (tags.length === 0) { console.error('태그 파싱 실패 — 원본:', raw); throw new Error('태그 파싱 실패. 다시 시도해주세요.'); }
 
-    const tagCloud = tags.map(tag =>
-      `<button class="tag-item" onclick="cpTag(this,'${tag.replace(/'/g,"\'")}')">
-        ${tag}
-      </button>`
-    ).join('');
+    const kwSet = new Set(coupangKeywords.map(k=>k.replace(/\s/g,'').toLowerCase()));
+    const tagCloud = tags.map(tag => {
+      const isCoupang = kwSet.has(tag.replace(/\s/g,'').toLowerCase());
+      const extra = isCoupang ? ' style="border-color:var(--accent);color:var(--accent)" title="쿠팡 자동완성 출처"' : '';
+      return `<button class="tag-item"${extra} onclick="cpTag(this,'${tag.replace(/'/g,"\\'")}')">${tag}${isCoupang?' ★':''}</button>`;
+    }).join('');
 
     document.getElementById('tagsResult').innerHTML = `
       <div style="font-size:10px;color:var(--text3);margin-bottom:8px;letter-spacing:1px">
-        태그 클릭 시 개별 복사 · 아래 버튼으로 전체 복사
+        태그 클릭 시 개별 복사 · ★표시는 쿠팡 자동완성 출처
       </div>
       <div class="tag-cloud">${tagCloud}</div>
-      <button class="tag-copy-all" id="tagCopyAllBtn" onclick="cpAllTags(${JSON.stringify(tags).replace(/"/g,'&quot;')})">
-        📋 태그 20개 전체 복사
-      </button>`;
+      <button class="tag-copy-all" id="tagCopyAllBtn" onclick='cpAllTags(${JSON.stringify(tags).replace(/'/g,"&#39;")})'>
+        📋 태그 ${tags.length}개 전체 복사
+      </button>
+      ${coupangKeywords.length ? `<div style="margin-top:10px;padding:8px;background:var(--surface2);border-radius:8px;font-size:11px;color:var(--text3)">🔥 쿠팡 수집: ${coupangKeywords.slice(0,15).join(' · ')}</div>` : ''}`;
 
-    toast('🏷 태그 20개 생성 완료!');
+    toast(coupangKeywords.length ? `🏷 쿠팡 인기태그 ${tags.length}개 생성!` : `🏷 태그 ${tags.length}개 생성 완료!`);
   } catch(e) {
     document.getElementById('tagsResult').innerHTML =
       `<div class="tool-empty" style="color:var(--red)">오류: ${e.message}</div>`;
