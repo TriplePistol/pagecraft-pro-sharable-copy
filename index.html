@@ -1520,7 +1520,7 @@ ${coupangRules}
         model: 'gemini-2.5-flash',
         systemInstruction: { parts: [{ text: sys }] },
         contents: [{ role: 'user', parts: [{ text: usr }] }],
-        generationConfig: { responseMimeType: "application/json", maxOutputTokens: 1000 }
+        generationConfig: { responseMimeType: "application/json", maxOutputTokens: 2048, temperature: 0.8 }
       })
     });
     
@@ -1528,22 +1528,66 @@ ${coupangRules}
     
     const data = await resp.json();
     const raw = data.candidates?.[0]?.content?.parts?.[0]?.text || '';
+    const finishReason = data.candidates?.[0]?.finishReason || '';
+    if (!raw) {
+      console.error('빈 응답:', data);
+      throw new Error('AI 응답이 비어있습니다. (' + (finishReason||'unknown') + ')');
+    }
     
-    // 파싱 강화 로직
-    let parsed;
-    try {
-      let clean = raw.replace(/```json/gi, '').replace(/```/g, '').trim();
-      parsed = JSON.parse(clean);
-    } catch (e) {
-      const match = raw.match(/\{[\s\S]*\}/);
-      if(match) {
-        parsed = JSON.parse(match[0].replace(/[\u0000-\u001F\u007F-\u009F]/g, ""));
-      } else {
-        throw new Error("상품명 파싱 실패");
+    // 파싱 강화 로직 (잘린 JSON 복구 지원)
+    let titles = [];
+    const cleanRaw = raw.replace(/```json/gi,'').replace(/```/g,'').replace(/[\u0000-\u001F\u007F-\u009F]/g,'').trim();
+    const tryParse = (txt) => { try { return JSON.parse(txt); } catch(_) { return null; } };
+    
+    // 1차: 그대로
+    let parsed = tryParse(cleanRaw);
+    
+    // 2차: 가장 바깥 {...}
+    if (!parsed) {
+      const s0 = cleanRaw.indexOf('{'), e0 = cleanRaw.lastIndexOf('}');
+      if (s0!==-1 && e0>s0) parsed = tryParse(cleanRaw.slice(s0,e0+1));
+    }
+    
+    // 3차: 중괄호 균형 커팅 (중간 잘림 대응)
+    if (!parsed) {
+      const s0 = cleanRaw.indexOf('{');
+      if (s0!==-1) {
+        let depth=0,inStr=false,esc=false,cut=-1;
+        for (let i=s0;i<cleanRaw.length;i++){
+          const c=cleanRaw[i];
+          if(esc){esc=false;continue;}
+          if(c==='\\'){esc=true;continue;}
+          if(c==='"'){inStr=!inStr;continue;}
+          if(inStr)continue;
+          if(c==='{')depth++;
+          else if(c==='}'){depth--;if(depth===0){cut=i;break;}}
+        }
+        if(cut>0) parsed = tryParse(cleanRaw.slice(s0,cut+1));
       }
     }
     
-    const titles = parsed.titles || [];
+    if (parsed && Array.isArray(parsed.titles)) {
+      titles = parsed.titles;
+    } else {
+      // 4차: titles 배열이 중간에 잘렸을 때 — 객체 단위 긁어내기
+      const objRe = /\{\s*"rank"[\s\S]*?"title"\s*:\s*"(?:[^"\\]|\\.)*"[\s\S]*?\}/g;
+      const matches = cleanRaw.match(objRe) || [];
+      for (const m of matches) { const o = tryParse(m); if (o && o.title) titles.push(o); }
+      
+      // 5차: title 키만이라도 추출
+      if (titles.length === 0) {
+        const titleRe = /"title"\s*:\s*"((?:[^"\\]|\\.)*)"/g;
+        const stratRe = /"strategy"\s*:\s*"((?:[^"\\]|\\.)*)"/g;
+        const ts = [...cleanRaw.matchAll(titleRe)].map(m=>m[1].replace(/\\"/g,'"'));
+        const ss = [...cleanRaw.matchAll(stratRe)].map(m=>m[1]);
+        ts.forEach((t,i)=>titles.push({rank:i+1, strategy:ss[i]||'생성', title:t}));
+      }
+      
+      if (titles.length === 0) {
+        console.error('상품명 파싱 실패 — 원본:', raw);
+        throw new Error("상품명 파싱 실패. 잠시 후 다시 시도해주세요. (콘솔에서 원본 응답 확인 가능)");
+      }
+    }
 
     document.getElementById('titleResult').innerHTML = titles.map(t => {
       const len = (t.char_count!=null) ? t.char_count : (t.title||'').length;
