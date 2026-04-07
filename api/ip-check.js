@@ -4,10 +4,7 @@ import { getStore } from './links/_store.js';
 // GET /api/ip-check → 이 IP가 등록되어 있는지 + AI 모델 이미지 잔여 횟수 반환
 
 // ⚠️ 테스트용: 5분당 2개 제한
-// const CYCLE_DAYS = 30;
-// const CYCLE_MS = CYCLE_DAYS * 24 * 60 * 60 * 1000;
-// const LIMIT = 100;
-const CYCLE_MS = 5 * 60 * 1000; // 5분
+const CYCLE_MS = 5 * 60 * 1000;
 const LIMIT = 2;
 
 function calcCycle(firstVisitIso) {
@@ -57,6 +54,7 @@ export default async function handler(req, res) {
 
     return res.status(200).json({
       recognized: true,
+      admin: ipData.linkToken === 'pin-auth',
       remaining: Math.max(0, LIMIT - used),
       used,
       limit: LIMIT,
