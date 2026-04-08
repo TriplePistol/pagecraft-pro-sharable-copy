@@ -3,7 +3,7 @@ import { getStore } from './links/_store.js';
 // ── IP 인식 확인 API ──
 // GET /api/ip-check → 이 IP가 등록되어 있는지 + AI 모델 이미지 잔여 횟수 반환
 
-// ⚠️ 테스트용: 5분당 2개 제한
+
 const CYCLE_MS = 5 * 60 * 1000;
 const LIMIT = 2;
 
@@ -40,6 +40,14 @@ export default async function handler(req, res) {
     }
 
     const ipData = typeof ipRaw === 'string' ? JSON.parse(ipRaw) : ipRaw;
+
+    // 링크 유효기간 만료 확인 (관리자 PIN 인증은 만료 없음)
+    if (ipData.expiresAt && ipData.linkToken !== 'pin-auth') {
+      if (new Date(ipData.expiresAt) < new Date()) {
+        return res.status(200).json({ recognized: false, expired: true });
+      }
+    }
+
     const { currentCycleStart, currentCycleEnd } = calcCycle(ipData.firstVisit);
 
     // 사용량 조회
