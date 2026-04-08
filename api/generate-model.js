@@ -3,10 +3,7 @@ import { getStore } from './links/_store.js';
 // ── AI 모델 이미지 생성 ──
 // gemini-2.5-flash-image 모델로 상품 착용 모델 이미지 생성
 // ⚠️ 테스트용: 5분당 2개 제한 (프로덕션: 30일/100개)
-// const CYCLE_DAYS = 30;
-// const CYCLE_MS = CYCLE_DAYS * 24 * 60 * 60 * 1000;
-// const LIMIT = 100;
-const CYCLE_MS = 5 * 60 * 1000; // 5분
+const CYCLE_MS = 5 * 60 * 1000;
 const LIMIT = 2;
 
 function calcCycle(firstVisitIso) {
