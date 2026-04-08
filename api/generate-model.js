@@ -2,7 +2,9 @@ import { getStore } from './links/_store.js';
 
 // ── AI 모델 이미지 생성 ──
 // gemini-2.5-flash-image 모델로 상품 착용 모델 이미지 생성
-// ⚠️ 테스트용: 5분당 2개 제한 (프로덕션: 30일/100개)
+// Vercel KV 기반 IP별 월 100장 제한 (첫 방문일 기준 30일 주기)
+
+
 const CYCLE_MS = 5 * 60 * 1000;
 const LIMIT = 2;
 
@@ -130,6 +132,16 @@ export default async function handler(req, res) {
       error: '등록되지 않은 접근입니다. 유효한 링크를 통해 먼저 접근해주세요.',
       code: 'IP_NOT_REGISTERED'
     });
+  }
+
+  // ── 링크 유효기간 만료 확인 ──
+  if (info.ipData.expiresAt && info.ipData.linkToken !== 'pin-auth') {
+    if (new Date(info.ipData.expiresAt) < new Date()) {
+      return res.status(403).json({
+        error: '링크의 유효 기간이 만료되었습니다.',
+        code: 'LINK_EXPIRED'
+      });
+    }
   }
 
   // ── 한도 확인 ──
