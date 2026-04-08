@@ -3,7 +3,6 @@ import { getStore } from './links/_store.js';
 // ── IP 인식 확인 API ──
 // GET /api/ip-check → 이 IP가 등록되어 있는지 + AI 모델 이미지 잔여 횟수 반환
 
-
 const CYCLE_MS = 5 * 60 * 1000;
 const LIMIT = 2;
 
@@ -68,6 +67,7 @@ export default async function handler(req, res) {
       limit: LIMIT,
       cycleResetAt: new Date(currentCycleEnd).toISOString(),
       firstVisit: ipData.firstVisit,
+      expiresAt: ipData.expiresAt || null,
     });
 
   } catch (err) {
